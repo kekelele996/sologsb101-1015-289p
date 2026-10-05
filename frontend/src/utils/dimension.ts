@@ -100,25 +100,67 @@ export function worseVigor(a: Vigor, b: Vigor): Vigor {
 }
 
 /**
- * 加固件是否超期未检查。
- * 依据 installDate / lastCheckDate 加上 checkCycleMon 个月，与今天比较。
+ * 加固件下次检查日期（原到期日）：最近检查日期 + 检查周期（月）。
+ * 缓检日只影响「实际生效的下次检查日期」，不改变原到期日本身。
  */
-export function isSupportOverdue(lastCheckDate: string, checkCycleMon: number, reference = today()): boolean {
-  const base = lastCheckDate === '' ? '' : lastCheckDate
-  if (base === '') return true
-  const next = addMonths(base, checkCycleMon)
-  return next < reference
-}
-
-/** 加固件下次检查日期 */
 export function nextCheckDate(lastCheckDate: string, checkCycleMon: number): string {
   if (lastCheckDate === '') return ''
   return addMonths(lastCheckDate, checkCycleMon)
 }
 
-/** 超期天数 */
-export function overdueDays(lastCheckDate: string, checkCycleMon: number, reference = today()): number {
-  const next = nextCheckDate(lastCheckDate, checkCycleMon)
+/**
+ * 缓检后实际生效的下次检查日期。
+ * 缓检只能往后推：缓检日晚于原到期日时以缓检日为准；
+ * 缓检日早于（或等于）原到期日时仍按原到期日算。
+ */
+export function effectiveNextCheckDate(
+  lastCheckDate: string,
+  checkCycleMon: number,
+  deferDate = '',
+): string {
+  const scheduled = nextCheckDate(lastCheckDate, checkCycleMon)
+  if (scheduled === '') return deferDate
+  if (deferDate === '' || deferDate <= scheduled) return scheduled
+  return deferDate
+}
+
+/** 缓检是否真正推后了下次检查日期 */
+export function isDeferEffective(
+  lastCheckDate: string,
+  checkCycleMon: number,
+  deferDate = '',
+): boolean {
+  if (deferDate === '') return false
+  const scheduled = nextCheckDate(lastCheckDate, checkCycleMon)
+  return scheduled !== '' && deferDate > scheduled
+}
+
+/**
+ * 加固件是否超期未检查。
+ * 以「原到期日与缓检日中更晚的一天」作为生效下次检查日期，与参考日期（默认今天）比较；
+ * 生效日期为今天时仍算周期内。
+ */
+export function isSupportOverdue(
+  lastCheckDate: string,
+  checkCycleMon: number,
+  deferDate = '',
+  reference = today(),
+): boolean {
+  if (lastCheckDate === '') return true
+  const next = effectiveNextCheckDate(lastCheckDate, checkCycleMon, deferDate)
+  if (next === '') return true
+  return next < reference
+}
+
+/** 超期天数（按缓检后生效的下次检查日期计算） */
+export function overdueDays(
+  lastCheckDate: string,
+  checkCycleMon: number,
+  deferDate = '',
+  reference = today(),
+): number {
+  if (lastCheckDate === '') return 0
+  const next = effectiveNextCheckDate(lastCheckDate, checkCycleMon, deferDate)
   if (next === '') return 0
   return Math.max(0, daysBetween(next, reference))
 }

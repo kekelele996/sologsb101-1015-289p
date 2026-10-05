@@ -10,7 +10,7 @@ import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
 import { stampSuffix } from './id'
-import { isSupportOverdue, overdueDays } from './dimension'
+import { effectiveNextCheckDate, isDeferEffective, isSupportOverdue, overdueDays } from './dimension'
 
 /** 触发浏览器下载 */
 export function download(filename: string, content: string, mime: string): void {
@@ -103,6 +103,7 @@ export function buildTreeCsv(
     '最近复壮日期',
     '加固件数',
     '超期未检查',
+    '缓检情况',
     '复评次数',
     '最新长势',
     '最新趋势',
@@ -115,7 +116,27 @@ export function buildTreeCsv(
     const treeSupports = supports.filter((row) => row.treeId === tree.id)
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latestReview = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
-    const overdue = treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    const overdue = treeSupports.filter((row) =>
+      isSupportOverdue(row.lastCheckDate, row.checkCycleMon, row.deferDate),
+    )
+    const deferred = treeSupports.filter((row) => row.deferDate !== '')
+    const deferText =
+      deferred.length === 0
+        ? '无'
+        : deferred
+            .map((row) => {
+              const effective = isDeferEffective(row.lastCheckDate, row.checkCycleMon, row.deferDate)
+              const reason = row.deferReason === '' ? '' : `（${row.deferReason}）`
+              if (!effective) {
+                return `${row.type}缓检 ${row.deferDate} 未晚于原到期日 ${effectiveNextCheckDate(
+                  row.lastCheckDate,
+                  row.checkCycleMon,
+                  row.deferDate,
+                )}，仍按原到期日算${reason}`
+              }
+              return `${row.type}缓检至 ${row.deferDate}${reason}`
+            })
+            .join('；')
     lines.push(
       [
         tree.code,
@@ -136,7 +157,12 @@ export function buildTreeCsv(
         treeMeasures.filter((row) => row.state === '已完成').length,
         tree.lastMeasureDate === '' ? '—' : tree.lastMeasureDate,
         treeSupports.length,
-        overdue.length === 0 ? '无' : overdue.map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate, row.checkCycleMon)} 天`).join('；'),
+        overdue.length === 0
+          ? '无'
+          : overdue
+              .map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate, row.checkCycleMon, row.deferDate)} 天`)
+              .join('；'),
+        deferText,
         treeReviews.length,
         latestReview === null ? '—' : latestReview.vigor,
         latestReview === null ? '—' : latestReview.trend,
@@ -184,13 +210,27 @@ export function buildTodoText(
   const lines: string[] = [`【古树名木复壮养护待办】共 ${trees.length} 株在档`]
   trees.forEach((tree) => {
     const pending = measures.filter((row) => row.treeId === tree.id && row.state !== '已完成').length
-    const overdue = supports.filter(
-      (row) => row.treeId === tree.id && isSupportOverdue(row.lastCheckDate, row.checkCycleMon),
+    const treeSupports = supports.filter((row) => row.treeId === tree.id)
+    const overdue = treeSupports.filter((row) =>
+      isSupportOverdue(row.lastCheckDate, row.checkCycleMon, row.deferDate),
     ).length
+    // 缓检后仍在周期内（含缓检到今天）的加固件：提醒已申请缓检、到期补检
+    const deferredInCycle = treeSupports.filter(
+      (row) =>
+        row.deferDate !== '' &&
+        isDeferEffective(row.lastCheckDate, row.checkCycleMon, row.deferDate) &&
+        !isSupportOverdue(row.lastCheckDate, row.checkCycleMon, row.deferDate),
+    )
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latest = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
+    const deferNote =
+      deferredInCycle.length === 0
+        ? ''
+        : `，缓检中 ${deferredInCycle.length} 件（${deferredInCycle
+            .map((row) => `${row.type}缓检至 ${row.deferDate}`)
+            .join('；')}，到期补检后清除缓检）`
     lines.push(
-      `· ${tree.code} ${tree.species}（${tree.protectLevel}，树龄 ${tree.ageYears} 年）待办措施 ${pending} 项，超期加固件 ${overdue} 件，最新长势 ${
+      `· ${tree.code} ${tree.species}（${tree.protectLevel}，树龄 ${tree.ageYears} 年）待办措施 ${pending} 项，超期加固件 ${overdue} 件${deferNote}，最新长势 ${
         latest === null ? '未复评' : `${latest.vigor}（${latest.trend}）`
       }`,
     )

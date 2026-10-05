@@ -18,7 +18,7 @@ import { seedDatabase } from './seed'
 export const DB_NAME = 'gbheritagetree'
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2
+export const DB_SCHEMA_VERSION = 3
 
 /** 数据行结构修订号 */
 export const ROW_REVISION = 2
@@ -43,7 +43,7 @@ class HeritageTreeDatabase extends Dexie {
     })
 
     // ---------- v2：补齐索引与回写字段，并迁移历史数据 ----------
-    this.version(DB_SCHEMA_VERSION)
+    this.version(2)
       .stores({
         trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
         // 复合索引 [treeId+date]：按古树 + 日期快速取检查记录
@@ -80,6 +80,23 @@ class HeritageTreeDatabase extends Dexie {
         await tx.table('supports').toCollection().modify((row: Record<string, unknown>) => {
           if (typeof row.lastCheckDate !== 'string') row.lastCheckDate = ''
           if (typeof row.checkCycleMon !== 'number') row.checkCycleMon = 12
+        })
+      })
+
+    // ---------- v3：加固件增加缓检（缓检日 + 缓检理由） ----------
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
+        surveys: 'id, treeId, [treeId+date], date, siteNote',
+        measures: 'id, treeId, type, state, date, operator',
+        supports: 'id, treeId, type, installDate, lastCheckDate',
+        reviews: 'id, treeId, date, vigor, trend',
+      })
+      .upgrade(async (tx) => {
+        // 迁移：加固件补齐「缓检日」「缓检理由」，历史数据视为未缓检
+        await tx.table('supports').toCollection().modify((row: Record<string, unknown>) => {
+          if (typeof row.deferDate !== 'string') row.deferDate = ''
+          if (typeof row.deferReason !== 'string') row.deferReason = ''
         })
       })
   }
@@ -215,9 +232,29 @@ export async function removeSupport(id: string): Promise<void> {
   await db.supports.delete(id)
 }
 
-/** 登记本次检查：把最近检查日期置为给定日期（默认今天） */
+/**
+ * 登记本次检查：把最近检查日期置为给定日期（默认今天），
+ * 同时清掉缓检，下次检查日期按检查周期从本次检查日重新起算。
+ */
 export async function markSupportChecked(id: string, date = today()): Promise<void> {
-  await db.supports.update(id, { lastCheckDate: date, updatedAt: nowIso() })
+  await db.supports.update(id, {
+    lastCheckDate: date,
+    deferDate: '',
+    deferReason: '',
+    updatedAt: nowIso(),
+  })
+}
+
+/**
+ * 申请缓检：记录缓检日与缓检理由。
+ * 缓检只能往后推：缓检日早于原到期日时不会改变生效的下次检查日期（仍按原到期日算）。
+ */
+export async function deferSupportCheck(id: string, deferDate: string, deferReason: string): Promise<void> {
+  await db.supports.update(id, {
+    deferDate,
+    deferReason,
+    updatedAt: nowIso(),
+  })
 }
 
 /* ------------------------------ 长势复评 ------------------------------ */
@@ -278,7 +315,18 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
     await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
     await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
     await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
+    await db.supports.bulkPut(
+      snapshot.supports.map((row) => {
+        // 兼容旧版存档（v2 及之前没有缓检字段）
+        const legacy = row as Partial<Support>
+        return {
+          ...row,
+          deferDate: typeof legacy.deferDate === 'string' ? legacy.deferDate : '',
+          deferReason: typeof legacy.deferReason === 'string' ? legacy.deferReason : '',
+          revision: ROW_REVISION,
+        }
+      }),
+    )
     await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
   })
 }

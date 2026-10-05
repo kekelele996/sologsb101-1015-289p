@@ -10,6 +10,7 @@ import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
 import { db, initDatabase } from '../utils/db'
+import { effectiveNextCheckDate } from '../utils/dimension'
 
 /** 时间线条目类型 */
 export type HistoryKind = 'survey' | 'measure' | 'support' | 'review'
@@ -60,12 +61,17 @@ export function buildHistory(
     })
   })
   supports.forEach((row) => {
+    const effectiveNext = effectiveNextCheckDate(row.lastCheckDate, row.checkCycleMon, row.deferDate)
+    const deferNote =
+      row.deferDate === ''
+        ? ''
+        : `，已缓检至 ${row.deferDate}（${row.deferReason === '' ? '未填理由' : row.deferReason}），生效下次检查 ${effectiveNext}`
     items.push({
       key: `support-${row.id}`,
       kind: 'support',
       date: row.installDate,
       title: `加固件 · ${row.type}`,
-      detail: `安装于 ${row.installDate}，检查周期 ${row.checkCycleMon} 个月，最近检查 ${row.lastCheckDate || '未记录'}`,
+      detail: `安装于 ${row.installDate}，检查周期 ${row.checkCycleMon} 个月，最近检查 ${row.lastCheckDate || '未记录'}，下次检查 ${effectiveNext || '—'}${deferNote}`,
       badge: row.type,
     })
   })

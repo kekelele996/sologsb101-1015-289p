@@ -149,7 +149,7 @@ function handleFilterChange(key: string, value: string): void {
       <StatBadge label="在档古树" :value="treeStore.trees.length" suffix="株" tone="primary" icon="Histogram" />
       <StatBadge label="一级古树" :value="totals.level1" suffix="株" tone="success" icon="DataLine" />
       <StatBadge label="衰弱/濒危" :value="totals.weak" suffix="株" tone="danger" icon="Warning" hint="最新长势为衰弱或濒危的古树" />
-      <StatBadge label="加固件超期" :value="totals.overdue" suffix="件" tone="warning" icon="Warning" hint="超过检查周期未检查的加固件" />
+      <StatBadge label="加固件超期" :value="totals.overdue" suffix="件" tone="warning" icon="Warning" hint="超过生效的下次检查日期（缓检顺延后）仍未检查的加固件；缓检日当天仍算周期内" />
       <StatBadge label="筛选结果" :value="rows.length" suffix="株" tone="info" icon="PieChart" size="small" />
     </div>
 
