@@ -20,6 +20,10 @@ export interface Support {
   checkCycleMon: number
   /** 最近检查日期 YYYY-MM-DD */
   lastCheckDate: string
+  /** 缓检日 YYYY-MM-DD（冬季 / 汛期无法上树时申请；空串表示未缓检） */
+  postponeDate: string
+  /** 缓检理由 */
+  postponeReason: string
   createdAt: string
   updatedAt: string
   revision: number

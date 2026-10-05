@@ -18,10 +18,10 @@ import { seedDatabase } from './seed'
 export const DB_NAME = 'gbheritagetree'
 
 /** 当前数据结构版本号（每次调整字段结构必须 +1 并补迁移） */
-export const DB_SCHEMA_VERSION = 2
+export const DB_SCHEMA_VERSION = 3
 
 /** 数据行结构修订号 */
-export const ROW_REVISION = 2
+export const ROW_REVISION = 3
 
 class HeritageTreeDatabase extends Dexie {
   trees!: Table<Tree, string>
@@ -80,6 +80,22 @@ class HeritageTreeDatabase extends Dexie {
         await tx.table('supports').toCollection().modify((row: Record<string, unknown>) => {
           if (typeof row.lastCheckDate !== 'string') row.lastCheckDate = ''
           if (typeof row.checkCycleMon !== 'number') row.checkCycleMon = 12
+        })
+      })
+
+    // ---------- v3：加固件增加缓检（缓检日 + 理由） ----------
+    this.version(DB_SCHEMA_VERSION)
+      .stores({
+        trees: 'id, code, species, protectLevel, ageYears, createdAt, updatedAt, owner',
+        surveys: 'id, treeId, [treeId+date], date, siteNote',
+        measures: 'id, treeId, type, state, date, operator',
+        supports: 'id, treeId, type, installDate, lastCheckDate',
+        reviews: 'id, treeId, date, vigor, trend',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('supports').toCollection().modify((row: Record<string, unknown>) => {
+          if (typeof row.postponeDate !== 'string') row.postponeDate = ''
+          if (typeof row.postponeReason !== 'string') row.postponeReason = ''
         })
       })
   }
@@ -215,9 +231,24 @@ export async function removeSupport(id: string): Promise<void> {
   await db.supports.delete(id)
 }
 
-/** 登记本次检查：把最近检查日期置为给定日期（默认今天） */
+/** 登记本次检查：把最近检查日期置为给定日期（默认今天），并清掉缓检、按周期重新起算 */
 export async function markSupportChecked(id: string, date = today()): Promise<void> {
-  await db.supports.update(id, { lastCheckDate: date, updatedAt: nowIso() })
+  await db.supports.update(id, {
+    lastCheckDate: date,
+    postponeDate: '',
+    postponeReason: '',
+    updatedAt: nowIso(),
+  })
+}
+
+/** 登记缓检：记录缓检日与理由（下次检查日期以缓检日与原到期日的较晚者为准） */
+export async function postponeSupport(id: string, postponeDate: string, postponeReason: string): Promise<void> {
+  await db.supports.update(id, { postponeDate, postponeReason, updatedAt: nowIso() })
+}
+
+/** 取消缓检：清除缓检日与理由，恢复按原检查周期计算到期日 */
+export async function clearSupportPostpone(id: string): Promise<void> {
+  await db.supports.update(id, { postponeDate: '', postponeReason: '', updatedAt: nowIso() })
 }
 
 /* ------------------------------ 长势复评 ------------------------------ */
@@ -278,7 +309,14 @@ export async function importSnapshot(snapshot: DatabaseSnapshot): Promise<void> 
     await db.trees.bulkPut(snapshot.trees.map((row) => ({ ...row, revision: ROW_REVISION })))
     await db.surveys.bulkPut(snapshot.surveys.map((row) => ({ ...row, revision: ROW_REVISION })))
     await db.measures.bulkPut(snapshot.measures.map((row) => ({ ...row, revision: ROW_REVISION })))
-    await db.supports.bulkPut(snapshot.supports.map((row) => ({ ...row, revision: ROW_REVISION })))
+    await db.supports.bulkPut(
+      snapshot.supports.map((row) => ({
+        ...row,
+        postponeDate: typeof row.postponeDate === 'string' ? row.postponeDate : '',
+        postponeReason: typeof row.postponeReason === 'string' ? row.postponeReason : '',
+        revision: ROW_REVISION,
+      }))
+    )
     await db.reviews.bulkPut(snapshot.reviews.map((row) => ({ ...row, revision: ROW_REVISION })))
   })
 }

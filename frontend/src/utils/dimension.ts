@@ -6,6 +6,7 @@
  * - 加固件检查周期超期判定
  */
 import type { Vigor } from '../types/review'
+import type { Support } from '../types/support'
 import { today } from './id'
 
 /** 厘米 → 米（保留 3 位小数） */
@@ -99,28 +100,61 @@ export function worseVigor(a: Vigor, b: Vigor): Vigor {
   return VIGOR_ORDER[a] <= VIGOR_ORDER[b] ? a : b
 }
 
-/**
- * 加固件是否超期未检查。
- * 依据 installDate / lastCheckDate 加上 checkCycleMon 个月，与今天比较。
- */
-export function isSupportOverdue(lastCheckDate: string, checkCycleMon: number, reference = today()): boolean {
-  const base = lastCheckDate === '' ? '' : lastCheckDate
-  if (base === '') return true
-  const next = addMonths(base, checkCycleMon)
-  return next < reference
+/** 加固件周期判定所需的最小字段集（Support / 表单草稿均可传入） */
+export type SupportSchedule = Pick<Support, 'lastCheckDate' | 'checkCycleMon'> & {
+  /** 缓检日，空串表示未缓检 */
+  postponeDate?: string
 }
 
-/** 加固件下次检查日期 */
+/**
+ * 加固件是否超期未检查。
+ * 依据最近检查日期加上检查周期（月）得到原到期日；若已申请缓检，
+ * 生效到期日取「原到期日」与「缓检日」的较大值（缓检只能往后推）。
+ * 生效到期日早于今天才算超期，缓检到今天仍算周期内。
+ */
+export function isSupportOverdue(schedule: SupportSchedule, reference = today()): boolean {
+  const postponeDate = schedule.postponeDate ?? ''
+  if (schedule.lastCheckDate === '' && postponeDate === '') return true
+  const due = supportDueDate(schedule)
+  if (due === '') return true
+  return due < reference
+}
+
+/** 加固件原下次检查日期（不含缓检） */
 export function nextCheckDate(lastCheckDate: string, checkCycleMon: number): string {
   if (lastCheckDate === '') return ''
   return addMonths(lastCheckDate, checkCycleMon)
 }
 
-/** 超期天数 */
-export function overdueDays(lastCheckDate: string, checkCycleMon: number, reference = today()): number {
-  const next = nextCheckDate(lastCheckDate, checkCycleMon)
-  if (next === '') return 0
-  return Math.max(0, daysBetween(next, reference))
+/**
+ * 加固件生效的下次检查日期：
+ * 未缓检时为原到期日；缓检日晚于原到期日时以缓检日为准，
+ * 缓检日早于（含等于）原到期日时仍按原到期日算。
+ */
+export function supportDueDate(schedule: SupportSchedule): string {
+  const original = nextCheckDate(schedule.lastCheckDate, schedule.checkCycleMon)
+  const postponeDate = schedule.postponeDate ?? ''
+  if (postponeDate === '') return original
+  if (original === '') return postponeDate
+  return postponeDate > original ? postponeDate : original
+}
+
+/**
+ * 加固件的缓检是否真正顺延了到期日。
+ * 缓检日不晚于原到期日时返回 false（仍按原到期日算）。
+ */
+export function isPostponeEffective(schedule: SupportSchedule): boolean {
+  const postponeDate = schedule.postponeDate ?? ''
+  if (postponeDate === '') return false
+  const original = nextCheckDate(schedule.lastCheckDate, schedule.checkCycleMon)
+  return original === '' || postponeDate > original
+}
+
+/** 超期天数（按生效到期日计算） */
+export function overdueDays(schedule: SupportSchedule, reference = today()): number {
+  const due = supportDueDate(schedule)
+  if (due === '') return 0
+  return Math.max(0, daysBetween(due, reference))
 }
 
 /** 日期加 n 个月，返回 YYYY-MM-DD */
